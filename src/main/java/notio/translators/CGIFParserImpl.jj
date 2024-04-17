@@ -1,0 +1,1924 @@
+package notio.translators;
+
+import java.util.Hashtable;
+import java.util.Vector;
+import java.util.Enumeration;
+import notio.*;
+import com.metamata.parse.*;
+
+grammar
+
+	/**
+	 * CGIF Parser implementation based on a JavaCC grammar.
+	 * This class should never be used directly.  Use CGIFParser instead.
+	 *
+	 * @author Finnegan Southey
+	 * @version $Name:  $ $Revision: 1.73.2.1 $, $Date: 1999/09/17 15:54:33 $
+	 * @legal Copyright (c) Finnegan Southey, 1996-1999
+	 *	This program is free software; you can redistribute it and/or modify it
+	 *	under the terms of the GNU Library General Public License as published
+	 *	by the Free Software Foundation; either version 2 of the License, or
+	 *	(at your option) any later version.  This program is distributed in the
+	 *	hope that it will be useful, but WITHOUT ANY WARRANTY; without even the
+	 *	implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+	 *	See the GNU Library General Public License for more details.  You should
+	 *	have received a copy of the GNU Library General Public License along
+	 *	with this program; if not, write to the Free Software Foundation, Inc.,
+	 *	675 Mass Ave, Cambridge, MA 02139, USA.
+	 *
+	 * @see notio.ParserException
+	 * @see notio.translators.CGIFParser
+	 *
+	 * @idea Should some or all macros be handled by a preprocessor?  It could
+	 * certainly make things like "If-Then" and universal quantification
+	 * macros much simpler.
+	 * @idea Option to trim trailing/leading spaces from comments.
+	 * @idea Make some Vectors global to improve speed.
+	 * @bug Token coverage is probably inadequate.  We sometimes throw TokenMgrError.
+	 * @bug ParserExceptions are still poor at providing locations.  Need access to 
+	 * scanner's state information.
+	 * @bug Graph termination problem remains.  Can use <EOF> at the end but doesn't
+	 * work for nested graphs.  Should probably use <EOF> to terminate Wrapper().
+	 * @bug Currently, Concept/Relation/Actor tokens may not use any of each other's closing
+	 * delimiter (e.g. you can not use a right paren in a concept comment).  Looks like the
+	 * only way around this is to start setting flags inside different node types or use
+	 * lexical states.  Node comments are a particularly bad design flaw in CGIF.
+	 * @bug Lots of ugly stuff in this class relates to outdated coreference scope checking.
+	 * @bug Ok: Need to pass several components down so we can connect them together when we 
+	 * know they will really be used.  
+	 * @bug What about the state of the defining label table after a ParserException?  
+	 * Currently, the state should be assumed to be bad, so a new table or translation
+	 * context should be used in the future.  Should we try to handle this elegantly?
+	 * Perhaps in CGIFParser.java?
+	 */
+class CGIFParserImpl
+	{
+		/** Name of MarkerTable unit in context. **/
+	private static final String MARKER_TABLE_NAME = "MARKER_TABLE";
+
+		/** Type label for negation relation type. **/
+	private static final String NEG_TYPE_LABEL = "Neg";
+
+
+		/** A knowledge base. **/
+	private KnowledgeBase knowledgeBase;
+	
+		/** The marker set from the knowledge base. **/
+	private MarkerSet markerSet;
+	
+		/** The concept type hierarchy from the knowledge base. **/
+	private ConceptTypeHierarchy conceptHierarchy;
+	
+		/** The relation type hierarchy from the knowledge base.  **/
+	private RelationTypeHierarchy relationHierarchy;
+	
+		/** A translation context. **/
+	private TranslationContext translationContext;
+
+		/** Flag to indicate whether types should be created on demand or a parse
+		 *  exception generated.
+		 */
+	private boolean createTypesOnDemand = true;
+
+		/**
+		 * Initializes a parser with the specified knowledge base, and translation
+		 * context.
+		 *
+		 * @param newKnowledgeBase  the knowledge base to be used while parsing.
+		 * @param newTranslationContext  the translation context to be used while
+		 * parsing.
+		 */
+	public void initializeCGIFParserImpl(KnowledgeBase newKnowledgeBase,
+		TranslationContext newTranslationContext)
+		{
+		knowledgeBase = newKnowledgeBase;
+		translationContext = newTranslationContext;
+		markerSet = knowledgeBase.getMarkerSet();
+		conceptHierarchy = knowledgeBase.getConceptTypeHierarchy();
+		relationHierarchy = knowledgeBase.getRelationTypeHierarchy();
+		}
+
+		/**
+		 * Returns an instance of ParserException with the specified message and
+		 * token as its offending token.
+		 *
+		 * @param message  the message to include.
+		 * @param offToken  the offending token.
+		 * @return an instance of ParserException.
+		 *
+		 * @bug Should include the expected tokens.
+		 */
+	private final ParserException generateParserException(String message, Token offToken)
+		{
+		return generateParserException(message, offToken, false, false);
+		}
+
+		/**
+		 * Returns an instance of ParserException with the specified message and
+		 * token as its offending token, and the before and after flags set as specified.
+		 *
+		 * @param message  the message to include.
+		 * @param offToken  the offending token.
+		 * @return an instance of ParserException.
+		 *
+		 * @bug Should include the expected tokens.
+		 */
+	private final ParserException generateParserException(String message, Token offToken,
+		boolean beforeFlag, boolean afterFlag)
+		{
+		String expectedTokenStrings[] = null;
+		
+/*		
+		if (__jjstate.expectedTokens != null)
+			{
+			expectedTokenStrings = new String[__jjstate.expectedTokens.length];
+			
+			for (int tok = 0; tok < __jjstate.expectedTokens.length; tok++)
+				{
+				expectedTokenStrings[tok] = __jjstate.scanner.getTokenImage(__jjstate.expectedTokens[tok]);
+				}
+			}
+*/
+
+		return new ParserException(message, offToken.image, offToken.beginLine, offToken.endLine,
+			offToken.beginColumn, offToken.endColumn, expectedTokenStrings, afterFlag, beforeFlag);
+		}
+		
+		/**
+		 * Returns the MarkerTable currently in used by this parser.
+		 *
+		 * @return the MarkerTable currently in used by this parser.
+		 */
+	private final MarkerTable getMarkerTable()
+		{
+		MarkerTable markerTable;
+
+		markerTable = (MarkerTable)translationContext.getUnit(MARKER_TABLE_NAME);
+
+		if (markerTable == null)
+			{
+			markerTable = new MarkerTable();
+			markerTable.setUnitName(MARKER_TABLE_NAME);
+			translationContext.addUnit(markerTable);
+			}
+
+		return markerTable;
+		}
+
+		/**
+		 * This method may be used to tell the parser whether it should create
+		 * type objects for any parsed type labels not currently in the database,
+		 * or throw an exception.  Created types have only the universal and
+		 * absurd types as parents and children respectively.
+		 * The flag is true by default.
+		 *
+		 * @param flag  true or false to turn automatic creation on or off.
+		 */
+	void setCreateTypesOnDemand(boolean flag)
+		{
+		createTypesOnDemand = flag;
+		}
+
+		/**
+		 * This method may be used to check whether the parser will create
+		 * type objects for any parsed type labels not currently in the database,
+		 * or throw an exception.  This flag is set using
+		 * setCreateTypesOnDemand().
+		 *
+		 * @return true if types will created on demand or false if an exception
+		 * will be thrown.
+		 */
+	boolean getCreateTypesOnDemand()
+		{
+		return createTypesOnDemand;
+		}
+
+		/**
+		 * Translates explicit escape sequences into their internal equivalent.
+		 *
+		 * @param input  the string to be translated.
+		 * @return the translated string.
+		 *
+		 * @bug Must add support for numeric escape sequences.
+		 */
+	public final String translateEscapeSequences(String input)
+		{
+		StringBuffer in = new StringBuffer(input);
+		StringBuffer output = new StringBuffer(input.length());
+		int inLen = input.length();
+		char c;
+
+		for (int ch = 0; ch < inLen; ch++)
+			{
+			c = in.charAt(ch);
+			if (c == '\\')
+				{
+				ch++;
+				c = in.charAt(ch);
+				switch (c)
+					{
+					case 'n':
+						output.append('\n');
+						break;
+
+					case 't':
+						output.append('\t');
+						break;
+
+					case 'b':
+						output.append('\b');
+						break;
+
+					case 'r':
+						output.append('\r');
+						break;
+
+					case 'f':
+						output.append('\f');
+						break;
+
+					default:
+						output.append(c);
+					}
+				}
+			else
+				output.append(c);
+			}
+
+		return output.toString();
+		}
+
+/* ** Skip Definitions ** */
+
+skip
+	{
+		" "
+	| "\t"
+	| "\r"
+	| "\n"
+	| "\f"
+	}
+
+/* ** Separators and Keywords ** */
+
+token[ignorecase]
+	{
+		<IF: "if">
+	|	<THEN: "then">
+	|	<ELSE: "else">
+	|	<EITHER: "either">
+	|	<OR: "or">
+	| < SCOPE: "sc" >
+	|	< LAMBDA: "lambda" >
+	}
+
+token
+	{
+		< LEFT_PAREN: "(" >
+	| < RIGHT_PAREN: ")" >
+	| < LEFT_BRACKET: "[" >
+	| < RIGHT_BRACKET: "]" >
+	| < LEFT_BRACE: "{" >
+	| < RIGHT_BRACE: "}" >
+	| < LEFT_ANGLE: "<" >
+	| < RIGHT_ANGLE: ">" >
+	| < COMMA: "," >
+	| < PERIOD: "." >
+	| < #SEMICOLON:  ";" >
+	| < COLON:  ":" >
+	| < QUESTIONMARK: "?" >
+	| < TILDE: "~" >
+	| < AT: "@" >
+	| < HASH: "#" >
+	| < PERCENT: "%" >
+	| < ASTERISK: "*" >
+	| < VERT_BAR: "|" >
+	| < CONCEPT_COMMENT: <SEMICOLON> ("\\]" | "\\\\" | ~[']',')','>'])* <RIGHT_BRACKET> >
+	| < RELATION_COMMENT: <SEMICOLON> ("\\)" | "\\\\" | ~[')',']','>'])* <RIGHT_PAREN> >
+	| < ACTOR_COMMENT: <SEMICOLON> ("\\>" | "\\\\" | ~['>',']',')'])* <RIGHT_ANGLE> >
+	}
+
+more
+	{
+		< "/**" ~['/'] > : IN_FORMAL_COMMENT
+	|
+		"/*" : IN_MULTI_LINE_COMMENT
+	}
+
+<IN_FORMAL_COMMENT>
+token
+	{
+		< FORMAL_COMMENT: "*/"  > : DEFAULT
+	}
+
+<IN_MULTI_LINE_COMMENT>
+token
+	{
+		< MULTI_LINE_COMMENT: "*/"  > : DEFAULT
+	}
+
+<IN_FORMAL_COMMENT,IN_MULTI_LINE_COMMENT>
+more
+	{
+		<  ~[]  >
+	}
+
+
+/* ** Literals ** */
+
+token
+	{
+		<  INTEGER_LITERAL:
+					<DECIMAL_LITERAL> (['l','L'])?
+				| <HEX_LITERAL> (['l','L'])?
+				| <OCTAL_LITERAL> (['l','L'])?
+		 >
+	|
+		<  #DECIMAL_LITERAL: ['1'-'9'] (['0'-'9'])*  >
+	|
+		<  #HEX_LITERAL: "0" ['x','X'] (['0'-'9','a'-'f','A'-'F'])+  >
+	|
+		<  #OCTAL_LITERAL: "0" (['0'-'7'])*  >
+	|
+		<  FLOATING_POINT_LITERAL:
+					(['0'-'9'])+ "." (['0'-'9'])* (<EXPONENT>)? (['f','F','d','D'])?
+				| "." (['0'-'9'])+ (<EXPONENT>)? (['f','F','d','D'])?
+				| (['0'-'9'])+ <EXPONENT> (['f','F','d','D'])?
+				| (['0'-'9'])+ (<EXPONENT>)? ['f','F','d','D']
+		 >
+	|
+		<  #EXPONENT: ['e','E'] (['+','-'])? (['0'-'9'])+  >
+	|
+		<  STRING_LITERAL:
+				"\""
+				(   (~['\"','\\','\n','\r'])
+					| ("\\"
+							( ['n','t','b','r','f','\\','\'','\"']
+							| ['0'-'7'] ( ['0'-'7'] )?
+							| ['0'-'3'] ['0'-'7'] ['0'-'7']
+							)
+						)
+				)*
+				"\""
+		 >
+	|
+		<  NAME_LITERAL:
+				"'"
+				(
+						(~['\'','\\','\n','\r'])
+					|
+					 ("\\"
+							( ['n','t','b','r','f','\\','\'','\"']
+							| ['0'-'7'] ( ['0'-'7'] )?
+							| ['0'-'3'] ['0'-'7'] ['0'-'7']
+							)
+						)
+				)*
+				"'"
+		 >
+	}
+
+/* ** IDENTIFIERS ** */
+
+token
+	{
+		<  IDENTIFIER: <LETTER> (<LETTER>|<DIGIT>)*  >
+	|
+		<  #LETTER:
+				[
+				 '$',
+				 'A'-'Z',
+				 '_',
+				 'a'-'z',
+				 '\u00c0'-'\u00d6',
+				 '\u00d8'-'\u00f6',
+				 '\u00f8'-'\u00ff',
+				 '\u0100'-'\u1fff',
+				 '\u3040'-'\u318f',
+				 '\u3300'-'\u337f',
+				 '\u3400'-'\u3d2d',
+				 '\u4e00'-'\u9fff',
+				 '\uf900'-'\ufaff'
+				]
+		 >
+	|
+		<  #DIGIT:
+				[
+				 '0'-'9',
+				 '\u0660'-'\u0669',
+				 '\u06f0'-'\u06f9',
+				 '\u0966'-'\u096f',
+				 '\u09e6'-'\u09ef',
+				 '\u0a66'-'\u0a6f',
+				 '\u0ae6'-'\u0aef',
+				 '\u0b66'-'\u0b6f',
+				 '\u0be7'-'\u0bef',
+				 '\u0c66'-'\u0c6f',
+				 '\u0ce6'-'\u0cef',
+				 '\u0d66'-'\u0d6f',
+				 '\u0e50'-'\u0e59',
+				 '\u0ed0'-'\u0ed9',
+				 '\u1040'-'\u1049'
+				]
+		 >
+	}
+
+
+/* ** RULES START HERE ** */
+
+
+/* Graph Rules */
+
+
+		/**
+		 * Attempts to parse a graph from the input stream.
+		 *
+		 * @param newGraph  the graph into which to parse (null causes a new graph to be
+		 * created).
+		 * @param definingLabelTable  the current defining label table.
+		 * @return the graph created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 */
+	public production Graph Graph(Graph newGraph, DefiningLabelTable definingLabelTable) throws ParserException
+		{
+			{
+			Concept concept = null;
+			Relation relation = null;
+			Actor actor = null;
+			String comment = null;
+
+			if (newGraph == null)
+				newGraph = new Graph();
+			}
+		(
+			(
+			lookahead(2)
+
+				Concept(newGraph, definingLabelTable)
+			|
+				SpecialContext(newGraph, definingLabelTable)
+			|
+				relation  = NegatedConcept(newGraph, definingLabelTable)
+					{
+					newGraph.addRelation(relation);
+					}
+			)
+		|
+			relation = Relation(newGraph, definingLabelTable)
+				{
+				newGraph.addRelation(relation);
+				}
+		|
+			actor = Actor(newGraph, definingLabelTable)
+				{
+				newGraph.addRelation(actor);
+				}
+		|
+			comment = GraphComment()
+				{
+				newGraph.addComment(comment.substring(2, comment.length()-2));
+				}
+		)+
+			{
+			
+			return newGraph;
+			}
+		}
+
+
+		/**
+		 * Attempts to parse a graph comment from the input stream.
+		 *
+		 * @return the graph comment created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 *
+		 * @idea Should this be split so we have a non-terminal for javadocs?
+		 */
+	public production String GraphComment() throws ParserException
+		{
+			{
+			com.metamata.parse.Token commentToken = null;
+			}
+		(
+			commentToken = <FORMAL_COMMENT>
+		  	{
+		  	// Must prefix with single asterisk since it is swallowed by the token matcher.
+			  return "*" + commentToken.image;
+			  }
+		|
+			commentToken = <MULTI_LINE_COMMENT>
+		  	{
+			  return commentToken.image;
+			  }
+		)
+		}
+
+
+/* Concept Rules */
+
+		/**
+		 * Attempts to parse a concept from the input stream.
+		 *
+		 * @param graph  the graph to which the new concept belongs.
+		 * @param definingLabelTable  the current defining label table.
+		 * @return the concept created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 *
+		 * @bug Some clarifying syntax removed to accomodate a bug in mparse 1.1.  Does not
+		 * affect functionality.
+		 * @bug Needs serious cleansing.
+		 */
+	public production Concept Concept(Graph graph, DefiningLabelTable definingLabelTable) throws ParserException
+		{
+			{
+			Concept newConcept = null;
+			ConceptType conType = null;
+			String typeMacro = null;
+			String comment = null;
+			Token defLabelToken = null;
+			Token boundLabelToken = null;			
+			Referent referent = null;
+			}
+
+		<LEFT_BRACKET>
+
+		[ 
+			conType = ConceptType() 
+		]
+
+		{
+		// We got this far so build the concept because we need it for the rest
+		newConcept = new Concept(conType);
+		
+		// Add newly created concept to graph (if any) so we can do coreference stuff
+		if (graph != null)
+			graph.addConcept(newConcept);
+		}
+		
+		[ <COLON> ]
+		
+		[
+			defLabelToken = DefinedLabel()
+				{
+				processConceptDefiningLabel(defLabelToken, newConcept, graph, definingLabelTable);
+				}
+		|
+				( 
+					boundLabelToken = BoundLabel() 
+						{ 
+						processConceptBoundLabel(boundLabelToken, newConcept, graph, definingLabelTable);
+						} 
+				)+
+		]
+
+		[ referent = Referent(referent, definingLabelTable) ]
+
+		( comment = ConceptComment()  | <RIGHT_BRACKET> )
+			{
+/*			// Create new concept if it wasn't creating before parsing the referent
+			if (newConcept == null)
+				newConcept = new Concept(contype, referent);
+*/
+			// Set concept referent
+			if (referent != null)
+				newConcept.setReferent(referent);
+
+			// Set concept comment
+			if (comment != null)
+				newConcept.setComment(comment);
+
+/*			// Add newly created concept to graph (if any) so we can do coreference stuff
+			if (graph != null)
+				graph.addConcept(newConcept);
+*/
+/*			// Handle defining label, if  any
+			if (defLabelToken != null)
+				{
+				processConceptDefiningLabel(defLabelToken, newConcept, graph, definingLabelTable);
+				}
+*/
+/*			// Handle bound labels (if any)
+			for (Enumeration enum = boundLabelTokenVec.elements(); enum.hasMoreElements();)
+				{
+				boundLabelToken = (Token)enum.nextElement();
+				processConceptBoundLabel(boundLabelToken, newConcept, graph, definingLabelTable);
+				}
+*/			
+			return newConcept;
+			}
+		}
+
+
+		/**
+		 * Attempts to parse a special context from the input stream.
+		 *
+		 * @param graph  the graph to which the new context (concept) belongs.
+		 * @param definingLabelTable  the current defining label table.
+		 * @return the concept created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 *
+		 * @bug Special context label is parsed but not used.  It should probably be made
+		 * into a type if the appropriate expansion is not to be performed.
+		 */
+	public production Concept SpecialContext(Graph graph, DefiningLabelTable definingLabelTable) throws ParserException
+		{
+			{
+			Graph descriptorGraph = new Graph();
+			Concept newConcept = null;
+			Referent referent = null;
+			String specialConLabel;
+			}
+
+		<LEFT_BRACKET>
+		specialConLabel = SpecialContextLabel()
+			{
+			referent = new Referent(descriptorGraph);
+			newConcept = new Concept(referent);
+			graph.addConcept(newConcept);
+			}
+		
+		{
+		// Push context on to stack
+		definingLabelTable.pushContext();
+		}
+		
+		Graph(descriptorGraph, definingLabelTable)
+
+		{
+		// Pop context from stack
+		definingLabelTable.popContext();
+		}
+		
+		<RIGHT_BRACKET>
+				{
+				return newConcept;
+				}
+		}
+
+
+		/**
+		 * Attempts to parse a negated concept from the input stream.
+		 *
+		 * @param graph  the graph to which the negated concept should be added.
+		 * @param definingLabelTable  the current defining label table.
+		 * @return the Neg relation attached to the negated concept.
+		 * @exception ParserException  if an error occurs while parsing.
+		 */
+	public production Relation NegatedConcept(Graph graph, DefiningLabelTable definingLabelTable) throws ParserException
+		{
+			{
+			Concept con[] = null;
+			Relation rel = null;
+			RelationType negType;
+			Graph descriptorGraph = null;
+			Referent referent = null;
+			}
+
+		<TILDE>
+		<LEFT_BRACKET>
+			{
+			con = new Concept[1];
+			descriptorGraph = new Graph();
+			referent = new Referent(descriptorGraph);
+			con[0] = new Concept(referent);
+			graph.addConcept(con[0]);
+			negType = establishNegRelationType();
+			rel = new Relation(negType, con);
+			}
+
+		{
+		// Push context on to stack
+		definingLabelTable.pushContext();
+		}
+			
+		Graph(descriptorGraph, definingLabelTable)
+
+		{
+		// Pop context from stack
+		definingLabelTable.popContext();
+		}
+		
+		<RIGHT_BRACKET>
+			{
+			return rel;
+			}
+		}
+
+
+		/**
+		 * Attempts to parse a concept type from the input stream.
+		 *
+		 * @return the concept type created or looked up by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 */
+	public production ConceptType ConceptType() throws ParserException
+		{
+			{
+			ConceptType conType = null;
+			}
+
+		(
+			conType = ConceptTypeLabel()
+		|
+			conType = MonadicLambdaExpression()
+		)
+			{
+			return conType;
+			}
+		}
+
+
+		/**
+		 * Attempts to parse a concept type label from the input stream.
+		 *
+		 * @return the concept type created or looked up by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 */
+	public production ConceptType ConceptTypeLabel() throws ParserException
+		{
+			{
+			com.metamata.parse.Token labelToken;
+			ConceptType conType;
+			}
+
+		labelToken = <IDENTIFIER>
+			{
+			conType = (ConceptType)conceptHierarchy.getTypeByLabel(labelToken.image);
+
+			if (conType == null)
+				if (createTypesOnDemand)
+					{
+					// Must create the type in this case.  Assume universal and absurd as
+					// parents and children.
+					conType = new ConceptType(labelToken.image);
+					try
+						{
+						conceptHierarchy.addTypeToHierarchy(conType);
+						}
+					catch (TypeAddError e)
+						{
+						throw new ParserException("Error adding concept type.", e);
+						}
+					catch (TypeChangeError e)
+						{
+						// Note: This should never happen since we don't specify parents or children.
+						throw new ParserException("Error adding concept type.", e);
+						}
+					}
+			else
+				throw generateParserException("Specified concept type is not present in concept type hierarchy.",
+					labelToken);
+
+			return conType;
+			}
+		}
+
+		/**
+		 * Attempts to parse a special context label from the input stream.
+		 *
+		 * @return the parsed label.
+		 * @exception ParserException  if an error occurs while parsing.
+		 */
+	public production String SpecialContextLabel() throws ParserException
+		{
+			{
+			com.metamata.parse.Token labelToken = null;
+			}
+
+		(
+			labelToken = <IF>
+		|
+			labelToken = <THEN>
+		|
+			labelToken = <EITHER>
+		|
+			labelToken = <OR>
+		|
+			labelToken = <SCOPE>
+		|
+			labelToken = <ELSE>
+				{
+				throw generateParserException("The special context label \"else\" is reserved but not currently supported and should not be used.", labelToken);
+				}
+		)
+			{
+			return labelToken.image;
+			}
+		}
+
+		/**
+		 * Attempts to parse a monadic lambda expression from the input stream.
+		 *
+		 * @return a concept type corresponding to a monadic lambda expression created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 *
+		 * @bug Search concept type hierarchy for monadic before creating it?  Currently
+		 * we just create an unlabelled type for every monadic we encounter.
+		 */
+	public production ConceptType MonadicLambdaExpression() throws ParserException
+		{
+			{
+			Graph expression = null;
+			Token defLabelToken;
+			ConceptType paramType;
+			ConceptTypeDefinition typeDef;
+			Concept defConcept;
+			ConceptType conType;
+			DefiningLabelTable definingLabelTable = new DefiningLabelTable();
+			}
+
+		<LEFT_PAREN>
+		<LAMBDA>
+
+		<LEFT_PAREN>
+		paramType = ConceptType()
+		defLabelToken = DefinedLabel()
+		<RIGHT_PAREN>
+
+		{
+		// Push context on to stack
+		definingLabelTable.pushContext();
+		}
+
+		[ expression = Graph(null, definingLabelTable) ]
+
+		<RIGHT_PAREN>
+			{
+			// We always create a type in this case.  Assume universal and absurd as
+			// parents and children.
+			if (expression == null)
+				{
+				// Create using signature alone
+				conType = new ConceptType(new ConceptTypeDefinition(paramType));
+				}
+			else
+				{
+				// Create using formal parameter and graph
+				// Find concept using defining label
+				defConcept = definingLabelTable.getDefiningConceptByDefiningLabel(defLabelToken.image);
+				if (defConcept == null)
+					{
+					throw generateParserException("The formal parameter concept labelled \""+defLabelToken.image+"\" is not defined in the associated graph.", defLabelToken);
+					}
+				else
+					if (!defConcept.isEnclosedBy(expression))
+						{
+						throw generateParserException("The formal parameter concept labelled \""+defLabelToken.image+"\" is not part of the associated graph.", defLabelToken);
+						}
+
+				// Type check vs. signature
+				if (!defConcept.getType().equals(paramType))
+					{
+					throw generateParserException("Type mismatch between signature and formal parameter: " + defLabelToken.image, defLabelToken);
+					}
+
+				conType = new ConceptType(new ConceptTypeDefinition(defConcept, expression));
+				}
+
+			try
+				{
+				conceptHierarchy.addTypeToHierarchy(conType);
+				}
+			catch (TypeAddError e)
+				{
+				throw new ParserException("Error adding concept type.", e);
+				}
+			catch (TypeChangeError e)
+				{
+				// Note: This should never happen since we don't specify parents or children.
+				throw new ParserException("Error adding concept type.", e);
+				}
+
+			// Pop context from stack
+			definingLabelTable.popContext();
+			
+			return conType;
+			}
+		}
+
+
+		/**
+		 * Attempts to parse a defining label from the input stream.
+		 *
+		 * @return the defining label token created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 *
+		 * @bug Shouldn't this really be called a DefiningLabel?
+		 */
+	public production Token DefinedLabel() throws ParserException
+		{
+			{
+			com.metamata.parse.Token labelToken;
+			}
+
+		<ASTERISK>
+		labelToken = <IDENTIFIER>
+			{
+			return labelToken;
+			}
+		}
+
+
+		/**
+		 * Attempts to parse a bound label from the input stream.
+		 *
+		 * @return the bound label token created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 */
+	public production Token BoundLabel() throws ParserException
+		{
+			{
+			com.metamata.parse.Token idenToken;
+			}
+
+		<QUESTIONMARK>
+		idenToken = <IDENTIFIER>
+			{
+			return idenToken;
+			}
+		}
+
+
+		/**
+		 * Attempts to parse a referent from the input stream.
+		 * This rule only matches non-blank referents.
+		 *
+		 * @param referent  a referent to be passed in or null.
+		 * @param definingLabelTable  the current defining label table.
+		 * @return the referent created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 *
+		 * @bug Certain quantifier/designator combinations don't make logical
+		 * sense but I don't think we can do anything about that here.
+		 */
+	public production Referent Referent(Referent referent, DefiningLabelTable definingLabelTable) throws ParserException
+		{
+			{
+			Macro quantifier = null;
+			Designator designator = null;
+			Graph descriptor = null;
+			}
+
+			{
+			// Push context on to stack
+			definingLabelTable.pushContext();
+			}
+
+
+//		(
+			(
+			[ quantifier = Quantifier() ]
+			[ designator = Designator() ]
+			[ descriptor = Graph(null, definingLabelTable) ]
+			)
+/*		|
+			(
+			designator = Designator(referent, definingLabelTable)
+			[ quantifier = Quantifier() ]
+			)
+*/
+
+			{
+			// Pop context from stack
+			definingLabelTable.popContext();
+			}
+
+
+//		)
+			{
+			if (referent == null && (quantifier != null || designator != null || descriptor != null))
+				referent = new Referent();
+				
+			if (referent != null)
+				{
+				referent.setQuantifier(quantifier);
+				referent.setDesignator(designator);
+				referent.setDescriptor(descriptor);
+				}
+			
+			return referent;
+			}
+		}
+
+
+		/**
+		 * Attempts to parse a quantifier from the input stream.
+		 * This rule only matches non-blank quantifiers.
+		 *
+		 * @return the quantifier created or looked up by parsing (null indicates
+		 * existential quantification).
+		 * @exception ParserException  if an error occurs while parsing.
+		 *
+		 * @idea Should there be a sub-interface of Macro called QuantifierMacro?
+		 */
+	public production Macro Quantifier() throws ParserException
+		{
+			{
+			Macro quantifier = null;
+			}
+
+		quantifier = QuantifierMacro()
+			{
+			return quantifier;
+			}
+		}
+
+
+		/**
+		 * Attempts to parse a quantifier macro from the input stream.
+		 *
+		 * @return the quantifier macro created or looked up by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 *
+		 * @bug Should there be a sub-interface of Macro called QuantifierMacro?
+		 * @bug Needs macro lookup.  Currently returns an UnimplementedMacro instance.
+		 */
+	public production Macro QuantifierMacro() throws ParserException
+		{
+			{
+			com.metamata.parse.Token macroNameToken = null;
+			Macro quantifier = null;
+			}
+
+		<AT>
+		macroNameToken = <IDENTIFIER>
+			{
+			// Must lookup macro here to provide appropriate object.  For now we will
+			// create an instance of UnimplementedMacro.
+			quantifier = new UnimplementedMacro(macroNameToken.image);
+			return quantifier;
+			}
+		}
+
+
+		/**
+		 * Attempts to parse a designator from the input stream.
+		 * This rule only matches non-blank designators.
+		 *
+		 * @param referent  the referent to which this designator belongs.
+		 * @param definingLabelTable  the current defining label table.
+		 * @return the designator created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 */
+	public production Designator Designator() throws ParserException
+		{
+			{
+			Designator designator = null;
+			}
+
+		(
+		 designator = Literal() |
+		 designator = Locator()
+		)
+			{
+			return designator;
+			}
+		}
+
+
+		/**
+		 * Attempts to parse a literal designator from the input stream.
+		 *
+		 * @return the literal designator created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 */
+	public production LiteralDesignator Literal() throws ParserException
+		{
+			{
+			Object literal = null;
+			LiteralDesignator literalDesignator = null;
+			}
+
+		( literal = Number() | literal = String() | literalDesignator = EncodedLiteral())
+			{
+			if (literal != null)
+				literalDesignator = new LiteralDesignator(literal, markerSet);
+				
+			return literalDesignator;
+			}
+		}
+
+
+		/**
+		 * Attempts to parse an encoded literal from the input stream.
+		 *
+		 * @return the literal designator created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 *
+		 * @bug Need to invoke a decoder or create some dummy object.  Probably need a flag 
+		 * indicating whether dummy's should be used, perhaps with a maximum size parameter.
+		 */
+	public production LiteralDesignator EncodedLiteral() throws ParserException
+		{
+			{
+			com.metamata.parse.Token encodingNameToken = null;			
+			com.metamata.parse.Token encodedDataToken = null;			
+			}
+
+		<PERCENT> 
+		encodingNameToken = <IDENTIFIER>
+		encodedDataToken = <STRING_LITERAL>
+			{
+			return new LiteralDesignator(encodedDataToken.image, markerSet);
+			}
+		}
+
+
+		/**
+		 * Attempts to parse a locator designator from the input stream.  For a name designator
+		 * it will return a NameDesignator instance and for a marker designator it will return
+		 * a MarkerDesignator instance, creating a native marker and mapping it to the foreign
+		 * marker ID, if necessary.  If a native marker exists that corresponds to the foreign
+		 * ID, it will be used to construct the MarkerDesignator.
+		 *
+		 * @return the locator designator created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 *
+		 * @bug No support for indexicals.  Probably need a pluggable indexical handler.
+		 * @bug The treatment of a plain hash ("#") is probably not appropriate for
+		 * all situations.  In any event, it certainly shouldn't be added to the
+		 * foreign ID translation table.  That is included temporarily to facilitate the
+		 * Muto project's testing.
+		 */
+	public production Designator Locator() throws ParserException
+		{
+			{
+			String name = null;
+			String markerID = null;
+			Marker marker = null;
+			}
+
+		// ( Name() | IndividualMarker() | Indexical() )
+		( name = Name() | markerID = IndividualMarker() )
+			{
+			if (name != null)
+				return new NameDesignator(name);
+			else
+				{
+				// If we just have a hash mark, we will create a new marker, taking it
+				// to mean 'a previously unidentified individual'.
+				if (markerID.equals("#"))
+					{
+			 	  marker = new Marker(markerSet, null);
+					markerID = "#" + marker.getMarkerID();
+		 	    getMarkerTable().mapForeignMarkerIDToNativeMarker(markerID, marker);
+					}
+				else
+					{
+			    marker = getMarkerTable().getNativeMarkerByForeignMarkerID(markerID);
+			 	  if (marker == null)
+				 	  {
+					  marker = new Marker(markerSet, null);
+			 	    getMarkerTable().mapForeignMarkerIDToNativeMarker(markerID, marker);
+			 	  	}
+					}
+
+
+				return new MarkerDesignator(marker);
+				}
+			}
+		}
+
+
+		/**
+		 * Attempts to parse an individual marker from the input stream.
+		 *
+		 * @return the string used to indicate the marker created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 *
+		 * @bug We should do the individual marker handling here and return
+		 * a MarkerDesignator.
+		 */
+	public production String IndividualMarker() throws ParserException
+		{
+			{
+			com.metamata.parse.Token numberToken = null;
+			}
+
+		<HASH>
+		[ numberToken = <INTEGER_LITERAL> ]
+			{
+			if (numberToken == null)
+				return "#";
+			else
+			  return "#" + numberToken.image;
+			}
+		}
+
+
+		/**
+		 * Attempts to parse a concept comment from the input stream.
+		 *
+		 * @return the comment created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 *
+		 * @bug Must remove excess backslashes from final string.
+		 */
+	public production String ConceptComment() throws ParserException
+		{
+			{
+			com.metamata.parse.Token commentToken;
+			}
+
+		commentToken = <CONCEPT_COMMENT>
+			{
+			return commentToken.image.substring(1, commentToken.image.length() -1);
+			}
+		}
+
+
+/* Relation Rules */
+
+		/**
+		 * Attempts to parse a relation from the input stream.
+		 *
+		 * @param graph  the graph to which any related concepts should be added.
+		 * @param definingLabelTable  the current defining label table.
+		 * @return the relation created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 *
+		 * @bug No valence checking.  Probably should just be an exception thrown
+		 * by the Relation class.  Actually, valence _is_ checked on construction.  
+		 * Relation should probably be throwing something other than IllegalArgumentException.
+		 */
+	public production Relation Relation(Graph graph, DefiningLabelTable definingLabelTable) throws ParserException
+		{
+			{
+			// Create vector with initial size of 5.  More than 5 arcs should be rare.
+			Vector arcVector = new Vector(5);
+			Concept arcConcept, arguments[];
+			String relComment = null;
+			RelationType relationType = null;
+			Relation rel;
+			}
+
+		<LEFT_PAREN>
+		( relationType = RelationTypeLabel() | relationType = LambdaExpression()  )
+		( arcConcept = Arc(graph, definingLabelTable) { arcVector.addElement(arcConcept); } )*
+		( relComment = RelationComment() | <RIGHT_PAREN> )
+			{
+			arguments = new Concept[arcVector.size()];
+			arcVector.copyInto(arguments);
+			try
+				{
+				if (relationType == null)
+				  rel = new Relation(arguments);
+				else
+					rel = new Relation(relationType, arguments);
+				}
+			catch(IllegalArgumentException e)
+				{
+				throw new ParserException("Number of arguments does not match specified valence of relation.", e);
+				}
+			rel.setComment(relComment);
+			return rel;
+			}
+		}
+
+
+		/**
+		 * Attempts to parse a relation type Label from the input stream.
+		 *
+		 * @return the relation type created or looked up by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 */
+	public production RelationType RelationTypeLabel()  throws ParserException
+		{
+			{
+			com.metamata.parse.Token labelToken = null;
+			RelationType relationType;
+			}
+
+		labelToken = <IDENTIFIER>
+			{
+			relationType = (RelationType)relationHierarchy.getTypeByLabel(labelToken.image);
+
+			if (relationType == null)
+				{
+				// Must create the type in this case.  Assume universal and absurd as
+				// parents and children.
+				relationType = new RelationType(labelToken.image);
+				try
+					{
+					relationHierarchy.addTypeToHierarchy(relationType);
+					}
+				catch (TypeAddError e)
+					{
+					// Have to do something better than this.
+					e.printStackTrace();
+					System.exit(1);
+					}
+				catch (TypeChangeError e)
+					{
+					// Have to do something better than this.
+					e.printStackTrace();
+					System.exit(1);
+					}
+				}
+
+			return relationType;
+			}
+		}
+
+
+		/**
+		 * Attempts to parse a lambda expression from the input stream.
+		 *
+		 * @return a relation type based on the parsed lambda expression.
+		 * @exception ParserException  if an error occurs while parsing.
+		 *
+		 * @bug Need to fix some problems creating RelationTypeDefinitions
+		 * for an unlabelled RelationType.
+		 * @bug Do we really need to push a context here?  Really don't need to pop it since
+		 * we just throw the table away.
+		 */
+	public production RelationType LambdaExpression() throws ParserException
+		{
+			{
+			Graph expr = null;
+			RelationType relationType = null;
+			Vector formalLabelVec = new Vector(10);
+			Vector formalTypeVec = new Vector(10);
+			Token paramLabelToken;
+			ConceptType paramType;
+			DefiningLabelTable definingLabelTable = new DefiningLabelTable();
+			}
+
+		<LEFT_PAREN>
+		<LAMBDA>
+
+		<LEFT_PAREN>
+		[
+			(
+				paramType = ConceptType()
+				paramLabelToken = DefinedLabel()
+					{
+					formalLabelVec.addElement(paramLabelToken.image);
+					formalTypeVec.addElement(paramType);
+					}
+			)
+
+			(
+				<COMMA>
+				paramType = ConceptType()
+				paramLabelToken = DefinedLabel()
+					{
+					formalLabelVec.addElement(paramLabelToken.image);
+					formalTypeVec.addElement(paramType);
+					}
+			)+
+		]
+		<RIGHT_PAREN>
+
+		{
+		// Push context on to stack
+		definingLabelTable.pushContext();
+		}
+
+		[ expr = Graph(null, definingLabelTable) ]
+		
+
+		
+		<RIGHT_PAREN>
+			{
+			if (expr == null)
+				{
+				// Build type using signature only
+
+				ConceptType signature[];
+
+				signature = new ConceptType[formalTypeVec.size()];
+				formalTypeVec.copyInto(signature);
+
+				relationType = new RelationType(new RelationTypeDefinition(signature));
+				}
+			else
+				{
+				// Build type using graph and formal parameters
+
+				Concept formalParameters[];
+				ConceptType signature[];
+				int paramCount;
+				String defLabel;
+
+				signature = new ConceptType[formalTypeVec.size()];
+				formalTypeVec.copyInto(signature);
+
+				formalParameters = new Concept[formalLabelVec.size()];
+				paramCount = 0;
+				for (Enumeration labelEnum = formalLabelVec.elements(); labelEnum.hasMoreElements();)
+					{
+					defLabel = (String)labelEnum.nextElement();
+					formalParameters[paramCount] = definingLabelTable.getDefiningConceptByDefiningLabel(defLabel);
+					if (formalParameters[paramCount] == null)
+						{
+						// No such defining concept, throw exception
+						throw new ParserException("The formal parameter concept labelled \""+defLabel+"\" is not defined in the associated graph.");
+						}
+					else
+						if (!formalParameters[paramCount].isEnclosedBy(expr))
+							{
+							// Defining concept not part of graph, throw exception
+							throw new ParserException("The formal parameter concept labelled \""+defLabel+"\" is not part of the associated graph.");
+							}
+
+					paramCount++;
+					}
+
+				// Perform type check vs. signature
+				for (int param = 0; param < signature.length; param++)
+					{
+					if (!formalParameters[param].getType().equals(signature[param]))
+						{
+						throw new ParserException("Type mismatch between signature and formal parameter: "+ (param + 1));
+						}
+					}
+
+				relationType = new RelationType(new RelationTypeDefinition(formalParameters, expr));
+				}
+
+			try
+				{
+				relationHierarchy.addTypeToHierarchy(relationType);
+				}
+			catch (TypeAddError e)
+				{
+				// Have to do something better than this.
+				e.printStackTrace();
+				System.exit(1);
+				}
+			catch (TypeChangeError e)
+				{
+				// Have to do something better than this.
+				e.printStackTrace();
+				System.exit(1);
+				}
+
+			// Pop context from stack
+			definingLabelTable.popContext();
+			
+			return relationType;
+			}
+		}
+
+
+		/**
+		 * Attempts to parse a relational arc from the input stream.
+		 *
+		 * @param graph  the graph to which the concept should be added.
+		 * @param definingLabelTable  the current defining label table.
+		 * @return the concept created by parsing or by lookup via bound label.
+		 * @exception ParserException  if an error occurs while parsing.
+		 */
+	public production Concept Arc(Graph graph, DefiningLabelTable definingLabelTable) throws ParserException
+		{
+			{
+			Concept arcConcept = null;
+			Concept defConcept = null;
+			Token boundLabelToken = null;
+			}
+
+		// Probably need some extra stuff here for literal concepts
+		 ( boundLabelToken = BoundLabel() | arcConcept = Concept(graph, definingLabelTable) )
+			{
+			// If we were given a bound label then we need to lookup the defining
+			// concept for the corresponding coreference set or check in defining concept table.
+			if (boundLabelToken != null)
+				{
+				defConcept = definingLabelTable.getDefiningConceptByDefiningLabel(boundLabelToken.image);
+
+				// Check to see if it was found in the definingConceptTable
+				if (defConcept == null)
+					{
+					// Not found in the definingConceptTable, so checking the definingLabelTable
+					// Note: It shouldn't be there either unless imported with the context.
+					CoreferenceSet corefSet;
+
+					corefSet = definingLabelTable.getCoreferenceSetByDefiningLabel(boundLabelToken.image);
+					if (corefSet == null)
+						{
+						// Unbound label.
+						throw generateParserException("Bound reference to unbound label in relation: " + boundLabelToken.image, boundLabelToken);
+						}
+
+					defConcept = corefSet.getDefiningConcept();
+
+					if (defConcept == null)
+						{
+						// Defining concept was never set, horrible horrible.  Should never happen.
+						throw generateParserException("Can't find defining concept associated with bound label: " + boundLabelToken.image, boundLabelToken);
+						}
+					}
+
+				// Check to see if defining concept is within the context of this relation
+				if (defConcept.getEnclosingGraph() == graph)
+					{
+					// They are in the same context so we can use the defining concept
+					arcConcept = defConcept;
+					}
+				else
+					{
+					// Defining concept is not in the same context
+					// We must either find a coreferent concept within the same context or create one
+					CoreferenceSet corefSets[];
+
+					corefSets = defConcept.getCoreferenceSets();
+					if (corefSets.length == 0)
+						{
+						// No coreference set so we create one and add both the dummy concept and the
+						// defining concept.
+
+						arcConcept = new Concept();
+						graph.addConcept(arcConcept);
+						processConceptBoundLabel(boundLabelToken, arcConcept, graph, definingLabelTable);
+						}
+					else
+						{
+						// Found a coreference set, check it for a coreferent concept in the same context
+						Concept corefConcepts[];
+						int con;
+
+						corefConcepts = corefSets[0].getCoreferentConcepts();
+
+						con = 0;
+						while ((con < corefConcepts.length) && (arcConcept == null))
+							{
+							if (corefConcepts[con].getEnclosingGraph() == graph)
+								{
+								arcConcept = corefConcepts[con];
+								}
+
+							con++;
+							}
+
+						if (arcConcept == null)
+							{
+							// Did not find a suitable concept in the same context so we must create one
+							// and add it to the coreference set.
+							arcConcept = new Concept();
+							graph.addConcept(arcConcept);
+							processConceptBoundLabel(boundLabelToken, arcConcept, graph, definingLabelTable);
+							}
+						}
+					}
+				}
+
+			return arcConcept;
+			}
+		}
+
+
+		/**
+		 * Attempts to parse a relation comment from the input stream.
+		 *
+		 * @return the comment created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 *
+		 * @bug Must remove excess backslashes from final string.
+		 */
+	public production String RelationComment() throws ParserException
+		{
+			{
+			com.metamata.parse.Token commentToken;
+			}
+
+		commentToken = <RELATION_COMMENT>
+			{
+			return commentToken.image.substring(1, commentToken.image.length() -1);
+			}
+		}
+
+
+/* Actor Rules */
+
+		/**
+		 * Attempts to parse an actor from the input stream.
+		 *
+		 * @param graph  the graph to which any related concepts should be added.
+		 * @param definingLabelTable  the current defining label table.
+		 * @return the actor created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 */
+	public production Actor Actor(Graph graph, DefiningLabelTable definingLabelTable) throws  ParserException
+		{
+			{
+			Actor actor = null;
+			RelationType relationType = null;
+			Vector inArcsVec = new Vector(10);
+			Vector outArcsVec = new Vector(10);
+			Concept inArcs[] = null;
+			Concept outArcs[] = null;
+			Concept arc = null;
+			String comment = null;
+			}
+
+		<LEFT_ANGLE>
+		( relationType = RelationTypeLabel() | relationType = LambdaExpression()  )
+
+		(
+			(
+				arc = Arc(graph, definingLabelTable)
+					{
+					inArcsVec.addElement(arc);
+					}
+			)*
+			<VERT_BAR>
+			(
+				arc = Arc(graph, definingLabelTable)
+					{
+					outArcsVec.addElement(arc);
+					}
+			)*
+		)
+
+		( comment = ActorComment()  | <RIGHT_ANGLE> )
+			{
+			inArcs = new Concept[inArcsVec.size()];
+			inArcsVec.copyInto(inArcs);
+			outArcs = new Concept[outArcsVec.size()];
+			outArcsVec.copyInto(outArcs);
+			actor = new Actor(relationType, inArcs, outArcs);
+			if (comment != null)
+				actor.setComment(comment);
+
+			return actor;
+			}
+		}
+
+
+		/**
+		 * Attempts to parse a actor comment from the input stream.
+		 *
+		 * @return the comment created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 *
+		 * @bug Must remove excess backslashes from final string.
+		 */
+	public production String ActorComment() throws ParserException
+		{
+			{
+			com.metamata.parse.Token commentToken;
+			}
+
+		commentToken = <ACTOR_COMMENT>
+			{
+			return commentToken.image.substring(1, commentToken.image.length() -1);
+			}
+		}
+
+
+
+/* Rules for primitives */
+
+		/**
+		 * Attempts to parse a name from the input stream.
+		 *
+		 * @return the name created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 *
+		 * @bug Need to add support for unquoted names, if that ends up in the standard.
+		 */
+	public production String Name() throws ParserException
+		{
+			{
+			com.metamata.parse.Token nameToken;
+			}
+
+		nameToken = <NAME_LITERAL>
+			{
+			return translateEscapeSequences(nameToken.image.substring(1, nameToken.image.length() - 1));
+			}
+		}
+
+
+		/**
+		 * Attempts to parse a number from the input stream.
+		 *
+		 * @return the number created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 *
+		 * @bug Currently all numbers are converted to doubles.  Might want to be
+		 * more intelligent about this.
+		 */
+	public production Number Number() throws ParserException
+		{
+			{
+			Number number = null;
+			com.metamata.parse.Token intToken = null, floatToken = null;
+			}
+
+		(intToken = <INTEGER_LITERAL> |
+		 floatToken = <FLOATING_POINT_LITERAL>)
+		 {
+		 try
+			 {
+			 if (intToken != null)
+				number = new Long(intToken.image);
+			 else
+				 number = new Double(floatToken.image);
+			 }
+		 catch (NumberFormatException e)
+			 {
+			 throw new ParserException("Invalid literal number format.", e);
+			 }
+
+		 return number;
+		 }
+		}
+
+
+		/**
+		 * Attempts to parse a string from the input stream.
+		 *
+		 * @return the string created by parsing.
+		 * @exception ParserException  if an error occurs while parsing.
+		 */
+	public production String String() throws ParserException
+		{
+			{
+			com.metamata.parse.Token strToken;
+			}
+
+		strToken = <STRING_LITERAL>
+			{
+			return translateEscapeSequences(strToken.image.substring(1, strToken.image.length() - 1));
+			}
+		}
+
+
+	/* ** Support methods for parsing ** */
+
+		/**
+		 * Performs the necessary processing on a concept's defining label.
+		 *
+		 * @param defLabelToken  the defining label token.
+		 * @param newConcept  the newly created concept.
+		 * @param graph  the graph to which the concept should have been added.
+		 */
+	private final void processConceptDefiningLabel(Token defLabelToken, Concept newConcept, Graph graph, DefiningLabelTable definingLabelTable) throws ParserException
+		{
+		// Check for duplicate coreference label in coref sets or defining concepts.
+		if ((definingLabelTable.getCoreferenceSetByDefiningLabel(defLabelToken.image) != null) ||
+			(definingLabelTable.getDefiningConceptByDefiningLabel(defLabelToken.image) != null))
+			{
+			// Duplicate coreference label definition.  Choke and die.
+			// Problem here is that we're not sure when to clear the corefTable.
+			throw generateParserException("Duplicate defining label.", defLabelToken);
+			}
+
+		// When we see a defining label, add it to the defining concept table
+		// If it's later seen as a bound label in another concept, then we create a
+		// coreference set for it and add it.
+		// If it's later seen as a bound label in a relation, we can reference it.
+		definingLabelTable.mapDefiningLabelToDefiningConcept(defLabelToken.image, newConcept);
+		}
+
+
+		/**
+		 * Performs the necessary processing on a concept's bound label.
+		 *
+		 * @param boundLabelToken  the bound label token.
+		 * @param newConcept  the newly created concept.
+		 * @param graph  the graph to which the concept should have been added.
+		 */
+	private final void processConceptBoundLabel(Token boundLabelToken, Concept newConcept, Graph graph, DefiningLabelTable definingLabelTable) throws ParserException
+		{
+		CoreferenceSet corefSet;
+
+		// Check to see if there is a coref set corresponding to the bound label
+		corefSet = definingLabelTable.getCoreferenceSetByDefiningLabel(boundLabelToken.image);
+		if (corefSet == null)
+			{
+			Concept definingConcept;
+
+			// Check to see if there is a defining concept corresponding to the bound label
+			definingConcept = definingLabelTable.getDefiningConceptByDefiningLabel(boundLabelToken.image);
+
+			if (definingConcept == null)
+				{
+				// Bound label reference without a corresponding corefSet in the table
+				// Spooky... means either bad syntax (labels must be defined first) or a
+				// problem in the table.
+				throw generateParserException("Bound reference to unbound label: " + boundLabelToken.image, boundLabelToken);
+				}
+			else
+				{
+				// This must be the first bound label occurance since establishing the defining
+				// concept.  Therefore, we must create a new CoreferenceSet and add the
+				// defining concept to it.
+
+				corefSet = new CoreferenceSet();
+				try
+					{
+					// Disable scope checking if the concept is not part of a graph
+					if (graph == null)
+						{
+				    // Disable coreference set's scope checking
+			  	  try
+			    		{
+							corefSet.setEnableScopeChecking(false);
+							}
+						catch (CorefAddException e1)
+							{
+							// Can't happen when we're setting it to false.
+							}
+						catch (InvalidDefiningConceptException e2)
+							{
+							// Can't happen when we're setting it to false.
+							}
+						}
+
+					corefSet.addCoreferentConcept(definingConcept);
+					}
+				catch (CorefAddException e)
+					{
+					// Should never happen since this is an empty coref set.
+					throw new ParserException("Problem adding defining concept to coreference set.", e);
+					}
+
+				try
+					{
+		  	  corefSet.setDefiningConcept(definingConcept);
+			    }
+				catch (InvalidDefiningConceptException e)
+					{
+					// Should never happen since this is an empty coref set.
+					throw new ParserException("Problem setting defining concept in coreference set.", e);
+					}
+
+				// Add newly defined coreference set to table
+				definingLabelTable.mapDefiningLabelToCoreferenceSet(boundLabelToken.image, corefSet);
+				}
+			}
+
+		// Having found or created the coreference set associated with this bound label,
+		// we add the new concept to the set.
+		try
+			{
+			// Disable scope checking if the concept is not part of a graph
+			if (graph == null)
+				{
+		    // Disable coreference set's scope checking
+		    try
+		    	{
+					corefSet.setEnableScopeChecking(false);
+					}
+				catch (CorefAddException e1)
+					{
+					// Can't happen when we're setting it to false.
+					}
+				catch (InvalidDefiningConceptException e2)
+					{
+					// Can't happen when we're setting it to false.
+					}
+				}
+
+			corefSet.addCoreferentConcept(newConcept);
+			}
+		catch (CorefAddException ex)
+			{
+			throw new ParserException("Problem adding concept to coreference set.", ex);
+			}
+		}
+				
+		
+		/**
+		 * Creates and/or returns the "Neg" relation type.
+		 *
+		 * @return  the "Neg" relation type.
+		 */
+	private final RelationType establishNegRelationType() throws ParserException
+		{
+		RelationType negType;
+		
+		// Lookup Neg relation type.  Create it if necessary and allowed.
+		negType = relationHierarchy.getTypeByLabel(NEG_TYPE_LABEL);
+		
+		if (negType == null)
+			{
+			if (createTypesOnDemand)
+				{
+				negType = new RelationType(NEG_TYPE_LABEL);
+				try
+					{
+					relationHierarchy.addTypeToHierarchy(negType);
+					}
+				catch (TypeAddError e)
+					{
+					throw new ParserException("Error adding auto-created "+NEG_TYPE_LABEL+" relation type.", e);
+					}
+				catch (TypeChangeError e)
+					{
+					// Note: This should never happen since we aren't specifying any parents or children.
+					throw new ParserException("Error adding auto-created "+NEG_TYPE_LABEL+" relation type.", e);
+					}
+				}
+			else
+				{
+				throw new ParserException(NEG_TYPE_LABEL+" relation type is missing in relation type hierarchy.");
+				}
+			}
+
+		return negType;
+		}
+	}

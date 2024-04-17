@@ -1,0 +1,1256 @@
+package notio.translators;
+
+import java.util.Hashtable;
+import java.util.Vector;
+import java.util.Enumeration;
+import notio.*;
+import com.metamata.parse.*;
+
+grammar
+
+  /**
+   * LF Parser implementation based on a Metamata Parse grammar.
+   * This class should never be used directly.  Use LFParser instead.
+   *
+   * @author Finnegan Southey
+   * @version $Name:  $ $Revision: 1.15 $, $Date: 1999/08/01 22:17:44 $
+	 * @legal Copyright (c) Finnegan Southey, 1996-1999
+	 *	This program is free software; you can redistribute it and/or modify it
+	 *	under the terms of the GNU Library General Public License as published
+	 *	by the Free Software Foundation; either version 2 of the License, or
+	 *	(at your option) any later version.  This program is distributed in the
+	 *	hope that it will be useful, but WITHOUT ANY WARRANTY; without even the
+	 *	implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+	 *	See the GNU Library General Public License for more details.  You should
+	 *	have received a copy of the GNU Library General Public License along
+	 *	with this program; if not, write to the Free Software Foundation, Inc.,
+	 *	675 Mass Ave, Cambridge, MA 02139, USA.
+	 *
+   * @see notio.ParserException
+   * @see notio.translators.LFParser
+   */
+class LFParserImpl
+	{
+		/** Name of DefiningLabelTable unit in context. **/
+	private static final String DEFINING_LABEL_TABLE_NAME = "DEFINING_LABEL_TABLE";
+		/** Name of MarkerTable unit in context. **/
+	private static final String MARKER_TABLE_NAME = "MARKER_TABLE";
+	  /** Type label for negation relation type. **/
+  private static final String NEG_TYPE_LABEL = "Neg";
+
+	  /** A knowledge base. **/
+  private KnowledgeBase knowledgeBase;
+	  /** The marker set from the knowledge base. **/
+  private MarkerSet markerSet;
+	  /** The concept type hierarchy from the knowledge base. **/
+  private ConceptTypeHierarchy conceptHierarchy;
+	  /** The relation type hierarchy from the knowledge base.  **/
+  private RelationTypeHierarchy relationHierarchy;
+	  /** A translation context. **/
+  private TranslationContext translationContext;
+		/** The DefiningLabelTable for the current context. **/
+	private DefiningLabelTable definingLabelTable;
+		/** The MarkerTable for the current context. **/
+	private MarkerTable markerTable;
+  /** Flag to indicate whether types should be created on demand or a parse
+   *  exception generated.
+   */
+  private boolean createTypesOnDemand = true;
+
+
+    /**
+     * Constructs a parser with the specified knowledge base, translation
+     * context, and input stream.
+     *
+     * @param newKnowledgeBase  the knowledge base to be used while parsing.
+     * @param newTranslationContext  the translation context to be used while
+     * parsing.
+     */
+  public void initializeLFParserImpl(KnowledgeBase newKnowledgeBase,
+    TranslationContext newTranslationContext)
+    {
+    knowledgeBase = newKnowledgeBase;
+    translationContext = newTranslationContext;
+    markerSet = knowledgeBase.getMarkerSet();
+    conceptHierarchy = knowledgeBase.getConceptTypeHierarchy();
+    relationHierarchy = knowledgeBase.getRelationTypeHierarchy();
+    definingLabelTable = getDefiningLabelTable();
+    markerTable = getMarkerTable();
+    }
+
+		/**
+		 * Returns an instance of ParseException.
+		 *
+		 * @return an instance of ParseException.
+		 */
+	public ParseException generateParseException()
+		{
+		return new ParseException(null);
+		}
+
+		/**
+		 * Returns the DefiningLabelTable currently in used by this parser.
+		 *
+		 * @return the DefiningLabelTable currently in used by this parser.
+		 */
+	private DefiningLabelTable getDefiningLabelTable()
+		{
+		DefiningLabelTable table;
+
+		table = (DefiningLabelTable)translationContext.getUnit(DEFINING_LABEL_TABLE_NAME);
+
+		if (table == null)
+			{
+			table = new DefiningLabelTable();
+			table.setUnitName(DEFINING_LABEL_TABLE_NAME);
+			translationContext.addUnit(table);
+			}
+
+		return table;
+		}
+
+		/**
+		 * Returns the MarkerTable currently in used by this parser.
+		 *
+		 * @return the MarkerTable currently in used by this parser.
+		 */
+	private MarkerTable getMarkerTable()
+		{
+		MarkerTable table;
+
+		table = (MarkerTable)translationContext.getUnit(MARKER_TABLE_NAME);
+
+		if (table == null)
+			{
+			table = new MarkerTable();
+			table.setUnitName(MARKER_TABLE_NAME);
+			translationContext.addUnit(table);
+			}
+
+		return table;
+		}
+
+    /**
+     * This method may be used to tell the parser whether it should create
+     * type objects for any parsed type labels not currently in the database,
+     * or throw an exception.  Created types have only the universal and
+     * absurd types as parents and children respectively.
+     * The flag is true by default.
+     *
+     * @param flag  true or false to turn automatic creation on or off.
+     */
+  void setCreateTypesOnDemand(boolean flag)
+    {
+    createTypesOnDemand = flag;
+    }
+
+    /**
+     * This method may be used to check whether the parser will create
+     * type objects for any parsed type labels not currently in the database,
+     * or throw an exception.  This flag is set using
+     * setCreateTypesOnDemand().
+     *
+     * @return true if types will created on demand or false if an exception
+     * will be thrown.
+     */
+  boolean getCreateTypesOnDemand()
+    {
+    return createTypesOnDemand;
+    }
+
+    /**
+     * Translates explicit escape sequences into their internal equivalent.
+     *
+     * @param input  the string to be translated.
+     * @return the translated string.
+     * @bug Must add support for numeric escape sequences.
+     */
+  public String translateEscapeSequences(String input)
+    {
+    StringBuffer in = new StringBuffer(input);
+    StringBuffer output = new StringBuffer(input.length());
+    int inLen = input.length();
+    char c;
+
+    for (int ch = 0; ch < inLen; ch++)
+      {
+      c = in.charAt(ch);
+      if (c == '\\')
+        {
+        ch++;
+        c = in.charAt(ch);
+        switch (c)
+          {
+          case 'n':
+            output.append('\n');
+            break;
+
+          case 't':
+            output.append('\t');
+            break;
+
+          case 'b':
+            output.append('\b');
+            break;
+
+          case 'r':
+            output.append('\r');
+            break;
+
+          case 'f':
+            output.append('\f');
+            break;
+
+          default:
+            output.append(c);
+          }
+        }
+      else
+        output.append(c);
+      }
+
+    return output.toString();
+    }
+
+/* Skip Definitions */
+
+skip
+{
+  " "
+| "\t"
+| "\r"
+// | "\n"    // Excluded this since newlines seem to be integral to the structure of LF
+| "\f"
+}
+
+/* Separators and Keywords */
+
+token
+{
+  < NEWLINE: "\n" >
+| < LAMBDA: "(lambda" >
+| < SCOPE: "[Scope" >
+| < TYPEMACRO: "(typeMacro" >
+| < LEFT_PAREN: "(" >
+| < RIGHT_PAREN: ")" >
+| < LEFT_BRACKET: "[" >
+| < RIGHT_BRACKET: "]" >
+| < LEFT_BRACE: "{" >
+| < RIGHT_BRACE: "}" >
+| < LEFT_ARROW: "<-">
+| < RIGHT_ARROW: "->">
+| < LEFT_ANGLE: "<" >
+| < RIGHT_ANGLE: ">" >
+| < COMMA: "," >
+| < PERIOD: "." >
+| < COLON: ":" >
+| < #SEMICOLON:  ";" >
+| < QUESTIONMARK: "?" >
+| < HYPHEN: "-" >
+| < TILDE: "~" >
+| < AT: "@" >
+| < HASH: "#" >
+| < ASTERISK: "*" >
+| < VERT_BAR: "|" >
+| < CONCEPT_COMMENT: <SEMICOLON> ("\\]" | "\\\\" | ~[']',')','>'])* <RIGHT_BRACKET> >
+| < RELATION_COMMENT: <SEMICOLON> ("\\)" | "\\\\" | ~[')',']','>'])* <RIGHT_PAREN> >
+| < ACTOR_COMMENT: <SEMICOLON> ("\\>" | "\\\\" | ~['>',']',')'])* <RIGHT_ANGLE> >
+}
+
+more
+{
+  < "/**" ~['/'] > : IN_FORMAL_COMMENT
+|
+  "/*" : IN_MULTI_LINE_COMMENT
+}
+
+<IN_FORMAL_COMMENT>
+token
+{
+  < FORMAL_COMMENT: "*/"  > : DEFAULT
+}
+
+<IN_MULTI_LINE_COMMENT>
+token
+{
+  < MULTI_LINE_COMMENT: "*/"  > : DEFAULT
+}
+
+<IN_FORMAL_COMMENT,IN_MULTI_LINE_COMMENT>
+more
+{
+  <  ~[]  >
+}
+
+
+/* Literals */
+
+token
+{
+  <  INTEGER_LITERAL:
+        <DECIMAL_LITERAL> (['l','L'])?
+      | <HEX_LITERAL> (['l','L'])?
+      | <OCTAL_LITERAL> (['l','L'])?
+   >
+|
+  <  #DECIMAL_LITERAL: ['1'-'9'] (['0'-'9'])*  >
+|
+  <  #HEX_LITERAL: "0" ['x','X'] (['0'-'9','a'-'f','A'-'F'])+  >
+|
+  <  #OCTAL_LITERAL: "0" (['0'-'7'])*  >
+|
+  <  FLOATING_POINT_LITERAL:
+        (['0'-'9'])+ "." (['0'-'9'])* (<EXPONENT>)? (['f','F','d','D'])?
+      | "." (['0'-'9'])+ (<EXPONENT>)? (['f','F','d','D'])?
+      | (['0'-'9'])+ <EXPONENT> (['f','F','d','D'])?
+      | (['0'-'9'])+ (<EXPONENT>)? ['f','F','d','D']
+   >
+|
+  <  #EXPONENT: ['e','E'] (['+','-'])? (['0'-'9'])+  >
+|
+  <  CHARACTER_LITERAL:
+      "'"
+      (   (~['\'','\\','\n','\r'])
+        | ("\\"
+            ( ['n','t','b','r','f','\\','\'','\"']
+            | ['0'-'7'] ( ['0'-'7'] )?
+            | ['0'-'3'] ['0'-'7'] ['0'-'7']
+            )
+          )
+      )
+      "'"
+   >
+|
+  <  STRING_LITERAL:
+      "\""
+      (   (~['\"','\\','\n','\r'])
+        | ("\\"
+            ( ['n','t','b','r','f','\\','\'','\"']
+            | ['0'-'7'] ( ['0'-'7'] )?
+            | ['0'-'3'] ['0'-'7'] ['0'-'7']
+            )
+          )
+      )*
+      "\""
+   >
+|
+  <  NAME_LITERAL:
+      "'"
+      (   (~['\'','\\','\n','\r'])
+        | ("\\"
+            ( ['n','t','b','r','f','\\','\'','\"']
+            | ['0'-'7'] ( ['0'-'7'] )?
+            | ['0'-'3'] ['0'-'7'] ['0'-'7']
+            )
+          )
+      )*
+      "'"
+   >
+}
+
+/* IDENTIFIERS */
+
+token
+{
+  <  IDENTIFIER: <LETTER> (<LETTER>|<DIGIT>)*  >
+|
+  <  #LETTER:
+      [
+       '$',
+       'A'-'Z',
+       '_',
+       'a'-'z',
+       '\u00c0'-'\u00d6',
+       '\u00d8'-'\u00f6',
+       '\u00f8'-'\u00ff',
+       '\u0100'-'\u1fff',
+       '\u3040'-'\u318f',
+       '\u3300'-'\u337f',
+       '\u3400'-'\u3d2d',
+       '\u4e00'-'\u9fff',
+       '\uf900'-'\ufaff'
+      ]
+   >
+|
+  <  #DIGIT:
+      [
+       '0'-'9',
+       '\u0660'-'\u0669',
+       '\u06f0'-'\u06f9',
+       '\u0966'-'\u096f',
+       '\u09e6'-'\u09ef',
+       '\u0a66'-'\u0a6f',
+       '\u0ae6'-'\u0aef',
+       '\u0b66'-'\u0b6f',
+       '\u0be7'-'\u0bef',
+       '\u0c66'-'\u0c6f',
+       '\u0ce6'-'\u0cef',
+       '\u0d66'-'\u0d6f',
+       '\u0e50'-'\u0e59',
+       '\u0ed0'-'\u0ed9',
+       '\u1040'-'\u1049'
+      ]
+   >
+}
+
+
+/* ** RULES START HERE ** */
+
+
+/* Graph Rules */
+
+    /**
+     * Attempts to parse a sentence from the input stream.
+     *
+     * @return the graph created by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production Graph Sentence() throws ParserException
+		{
+			{
+			Graph newGraph;
+			}
+
+		(
+			newGraph = Graph()
+			( <PERIOD> | <QUESTIONMARK> )
+		)
+			{
+			return newGraph;
+			}
+		}
+
+    /**
+     * Attempts to parse a graph from the input stream.
+     *
+     * @return the graph created by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production Graph Graph() throws ParserException
+		{
+			{
+			Graph newGraph = new Graph();
+			}
+
+		(
+			ConceptAndLinks(newGraph)
+		|
+			RelationAndLinks(newGraph, null, 0)
+		)
+			{
+			return newGraph;
+			}
+		}
+
+    /**
+     * Attempts to parse a concept and any links from the input stream.
+     *
+		 * @param graph  the graph to which nodes are being added.
+		 * @return the parsed concept.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production Concept ConceptAndLinks(Graph graph) throws ParserException
+		{
+			{
+			Concept newConcept;
+			int linkingArc = 0;
+			}
+
+		newConcept = Concept()
+			{
+			graph.addConcept(newConcept);
+			}
+
+		[
+			// Necessary to prevent choice conflicts involving <HYPHEN>
+			lookahead(2)
+
+		  linkingArc = Arc() RelationAndLinks(graph, newConcept, linkingArc)
+		|
+			<HYPHEN>
+			( <NEWLINE> linkingArc = Arc() RelationAndLinks(graph, newConcept, linkingArc) )+
+			<COMMA>
+		]
+			{
+			return newConcept;
+			}
+		}
+
+		/**
+     * Attempts to parse a relation and any links from the input stream.
+     *
+		 * @param graph  the graph to which nodes are being added.
+		 * @param preceedingConcept  the Concept linked immediately to the left of the
+		 * relation to be parsed, or null if no such concept is present.
+		 * @param preceedingArc  the value of the preceeding arc which is only meaningful
+		 * if the preceedingConcept is not null.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production void RelationAndLinks(Graph graph, Concept preceedingConcept,
+		int preceedingArc)
+		throws ParserException
+		{
+			{
+			Relation newRelation;
+			Concept followingConcept;
+			int followingArc;
+			Vector argConcepts = new Vector(10);
+			Vector argArcs = new Vector(10);
+			}
+
+		newRelation = Relation()
+			{
+			if (preceedingConcept != null)
+				{
+				// Add the preceeding concept and arc to list of arguments, flipping the sign of
+				// of the arc to reflect that it's coming from the left.  That way, we can simply
+				// regard all positive arc values as outgoing.
+				argConcepts.addElement(preceedingConcept);
+				argArcs.addElement(new Integer(-preceedingArc));
+				}
+			}
+
+		[
+			// Necessary to prevent choice conflicts involving <HYPHEN>
+			lookahead(2)
+
+			followingArc = Arc()
+			followingConcept = ConceptAndLinks(graph)
+				{
+				// Add following concept as argument.
+				argConcepts.addElement(followingConcept);
+				argArcs.addElement(new Integer(followingArc));
+				}
+		|
+			<HYPHEN>
+			(
+			<NEWLINE>
+			followingArc = Arc()
+			followingConcept = ConceptAndLinks(graph)
+				{
+				// Add following concept as argument.
+				argConcepts.addElement(followingConcept);
+				argArcs.addElement(new Integer(followingArc));
+				}
+			)+
+			<COMMA>
+		]
+			{
+			int highestIndex = -1;
+			int currArc;
+			int simpleIn = 0;
+			int simpleOut = 0;
+			Concept argArr[] = null;
+			Enumeration arcEnum, conEnum;
+
+			for (arcEnum = argArcs.elements(); arcEnum.hasMoreElements();)
+				{
+				currArc = ((Integer)arcEnum.nextElement()).intValue();
+				if (currArc == 1)
+					simpleOut++;
+				else
+					if (currArc == -1)
+						simpleIn++;
+					else
+						{
+						// What do we do with the direction of numbered arcs?
+						// Shall we assume that they are all incoming?
+						currArc = Math.abs(currArc) - 2;
+						if (currArc > highestIndex)
+							highestIndex = currArc;
+						}
+				}
+
+			if (highestIndex == -1)
+				{
+				// No numbered arcs present
+				int inCount, outCount;
+				Concept currConcept;
+
+				// We'll build the array with the simple ins taken in order followed by the
+				// simple outs taken in order
+				argArr = new Concept[simpleIn + simpleOut];
+
+				arcEnum = argArcs.elements();
+				conEnum = argConcepts.elements();
+
+				inCount = 0;
+				outCount = 0;
+
+				while (arcEnum.hasMoreElements())
+					{
+					currArc = ((Integer)arcEnum.nextElement()).intValue();
+					currConcept = (Concept)conEnum.nextElement();
+
+					if (currArc == 1)
+						{
+						argArr[outCount + simpleIn] = currConcept;
+						outCount++;
+						}
+					else
+						{
+						argArr[inCount] = currConcept;
+						inCount++;
+						}
+					}
+				}
+			else
+				{
+				// One or more numbered arcs present
+
+				// Currently can't handle it so we'll throw an exception.
+				throw new ParserException("Current implementation cannot handle numbered arcs.");
+				}
+
+			// Add arguments to relation
+			newRelation.setArguments(argArr);
+
+			// Add relation to graph
+			graph.addRelation(newRelation);
+			}
+		}
+
+
+    /**
+     * Attempts to parse a relational arc from the input stream.
+     * The integer value returned is determined as follows: <BR>
+     * ->   ==   1	<BR>
+     * <-   ==  -1	<BR>
+     * -1-> ==   3	<BR>
+     * <-1- ==  -3	<BR>
+     * etc...<BR>
+     *
+     * @return the index of the arc plus two and negated if left-pointing,
+     * or -1 to indicate an unnumbered left arc, or +1 to indicate an unnumbered right arc.
+     * @exception ParserException  if an error occurs while parsing.
+     *
+     * @bug We should probably throw an exception if an arc is numbered <= 0.
+     */
+	public production int Arc() throws ParserException
+		{
+			{
+			com.metamata.parse.Token intToken = null;
+			int arcVal = -1;
+			boolean leftArc = false;
+			}
+
+		(
+			<LEFT_ARROW> [ intToken = <INTEGER_LITERAL> <HYPHEN> ]
+				{
+				leftArc = true;
+				}
+		|
+			[  <HYPHEN> intToken = <INTEGER_LITERAL> ] <RIGHT_ARROW>
+				{
+				leftArc = false;
+				}
+		)
+			{
+			if (intToken == null)
+				{
+				if (leftArc)
+					return -1;
+				else
+					return +1;
+				}
+			else
+				{
+				try
+					{
+					arcVal = Integer.parseInt(intToken.image);
+					if (leftArc)
+						return -(arcVal + 2);
+					else
+						return (arcVal + 2);
+					}
+				catch (NumberFormatException e)
+					{
+					// Shouldn't happen since we've already parsed it as an integer
+					e.printStackTrace();
+					System.exit(1);
+					}
+				}
+			}
+		}
+
+
+    /**
+     * Attempts to parse a graph comment from the input stream.
+     *
+     * @return the graph comment created by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production String GraphComment() throws ParserException
+		{
+		  {
+  		return null;
+  		}
+		}
+
+
+/* Concept Rules */
+
+    /**
+     * Attempts to parse a concept from the input stream.
+     *
+     * @return the concept created by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production Concept Concept() throws ParserException
+		{
+		  {
+		  ConceptType conType = null;
+		  Referent referent = null;
+		  String defLabel = null;
+		  String boundLabel = null;
+		  }
+
+		<LEFT_BRACKET>
+		[
+			conType = ConceptTypeLabel()
+			[
+				<COLON>
+				[  // CHANGED TO BRACKETS FROM PARENS FOR MPARSE 1.1 bug
+					referent = Referent()
+				|
+					defLabel = DefiningLabel()
+				]  // CHANGED TO BRACKETS FROM PARENS FOR MPARSE 1.1 bug
+			]
+		|
+			boundLabel = BoundLabel()
+		]
+		<RIGHT_BRACKET>
+		  {
+		  if (conType != null)
+		    if (referent != null)
+		    	{
+		      return new Concept(conType, referent);
+		      }
+		    else
+		    	{
+		    	Concept newConcept;
+
+		      newConcept = new Concept(conType);
+					// Add to defining label table
+					return newConcept;
+		      }
+		  else
+		    if (boundLabel != null)
+		      {
+		      // Should return the defining concept corresponding to this label
+		      return null;
+		      }
+		    else
+		      {
+		      // Return empty concept
+		      return new Concept();
+		      }
+		  }
+		}
+
+    /**
+     * Attempts to parse a concept type label from the input stream.
+     *
+     * @return the concept type created or looked up by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production ConceptType ConceptTypeLabel() throws ParserException
+		{
+			{
+			com.metamata.parse.Token labelToken;
+			ConceptType conType;
+			}
+
+		labelToken = <IDENTIFIER>
+			{
+			conType = (ConceptType)conceptHierarchy.getTypeByLabel(labelToken.image);
+
+			if (conType == null)
+				if (createTypesOnDemand)
+					{
+					// Must create the type in this case.  Assume universal and absurd as
+					// parents and children.
+					conType = new ConceptType(labelToken.image);
+					try
+						{
+						conceptHierarchy.addTypeToHierarchy(conType);
+						}
+					catch (TypeAddError e)
+						{
+						throw new ParserException("Error adding concept type.", e);
+						}
+					catch (TypeChangeError e)
+						{
+						// Note: This should never happen since we don't specify parents
+						// or children.
+						throw new ParserException("Error adding concept type.", e);
+						}
+					}
+				else
+					throw new ParserException(
+						"Specified concept type is not present in concept type hierarchy.",
+						generateParseException());
+
+				return conType;
+				}
+		}
+
+    /**
+     * Attempts to parse a defining label from the input stream.
+     *
+     * @return the defining label created by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production String DefiningLabel() throws ParserException
+		{
+			{
+			com.metamata.parse.Token labelToken;
+			}
+		<ASTERISK>
+		labelToken = <IDENTIFIER>
+			{
+			return labelToken.image;
+			}
+		}
+
+
+    /**
+     * Attempts to parse a bound label from the input stream.
+     *
+     * @return the bound label created by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production String BoundLabel() throws ParserException
+		{
+			{
+			com.metamata.parse.Token idenToken;
+			}
+			<QUESTIONMARK>
+			idenToken = <IDENTIFIER>
+				{
+				return idenToken.image;
+				}
+		}
+
+
+    /**
+     * Attempts to parse a referent from the input stream.
+     *
+     * @return the referent created by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production Referent Referent() throws ParserException
+		{
+			{
+			Designator newDesignator;
+			Graph newDescriptor;
+			}
+
+		(
+			newDesignator = Designator()
+			  {
+  			return new Referent(newDesignator);
+  			}
+  	|
+  		newDescriptor = Graph()
+  			{
+  			return new Referent(newDescriptor);
+  			}
+  	)
+		}
+
+
+    /**
+     * Attempts to parse a quantifier from the input stream.
+     *
+     * @return the quantifier created or looked up by parsing (null indicates
+     * existential quantification).
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production Macro Quantifier() throws ParserException
+		{
+			{
+			Macro quantifier = null;
+			}
+		quantifier = QuantifierMacro()
+			{
+			return quantifier;
+			}
+		}
+
+
+    /**
+     * Attempts to parse a quantifier macro from the input stream.
+     *
+     * @return the quantifier macro created or looked up by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production Macro QuantifierMacro() throws ParserException
+		{
+			{
+			com.metamata.parse.Token macroNameToken = null;
+			Macro quantifier = null;
+			}
+		<AT>
+		macroNameToken = <IDENTIFIER>
+			{
+			// Must lookup macro here to provide appropriate object.  For now we will
+			// create an instance of UnimplementedMacro.
+			quantifier = new UnimplementedMacro(macroNameToken.image);
+			return quantifier;
+			}
+		}
+
+
+    /**
+     * Attempts to parse a designator from the input stream.
+     *
+     * @return the designator created by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production Designator Designator() throws ParserException
+		{
+			{
+			Designator designator = null;
+			}
+		(
+			designator = Literal()
+		|
+			designator = Locator()
+		)
+			{
+			return designator;
+			}
+		}
+
+
+    /**
+     * Attempts to parse a literal designator from the input stream.
+     *
+     * @return the literal designator created by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production LiteralDesignator Literal() throws ParserException
+		{
+			{
+			Object literal = null;
+			}
+		(
+			literal = Number()
+		|
+			literal = String()
+		)
+			{
+			return new LiteralDesignator(literal, markerSet);
+			}
+		}
+
+
+    /**
+     * Attempts to parse a locator designator from the input stream.  For a name designator
+     * it will return a NameDesignator instance and for a marker designator it will return
+     * a MarkerDesignator instance, creating a native marker and mapping it to the foreign
+     * marker ID, if necessary.  If a native marker exists that corresponds to the foreign
+     * ID, it will be used to construct the MarkerDesignator.
+     *
+     * @return the locator designator created by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production Designator Locator() throws ParserException
+		{
+			{
+			String name = null;
+			String markerID = null;
+			Marker marker = null;
+			}
+		(
+			name = Name()
+		|
+			markerID = IndividualMarker()
+		)
+			{
+			if (name != null)
+				return new NameDesignator(name);
+			else
+				{
+				// If we just have a hash mark, we will create a new marker, taking it
+				// to mean 'a previously unidentified individual'.
+				if (markerID.equals("#"))
+					{
+					marker = new Marker(markerSet, null);
+					markerID = "#" + marker.getMarkerID();
+					markerTable.mapForeignMarkerIDToNativeMarker(markerID, marker);
+					}
+				else
+					{
+					marker = markerTable.getNativeMarkerByForeignMarkerID(markerID);
+					if (marker == null)
+						{
+						marker = new Marker(markerSet, null);
+						markerTable.mapForeignMarkerIDToNativeMarker(markerID, marker);
+						}
+					}
+
+				return new MarkerDesignator(marker);
+				}
+			}
+		}
+
+
+    /**
+     * Attempts to parse an individual marker from the input stream.
+     *
+     * @return the string used to indicate the marker created by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production String IndividualMarker() throws ParserException
+		{
+			{
+			com.metamata.parse.Token numberToken = null;
+			}
+		<HASH>
+		[ numberToken = <INTEGER_LITERAL> ]
+			{
+			if (numberToken == null)
+				return "#";
+			else
+				return "#" + numberToken.image;
+			}
+		}
+
+/* Relation Rules */
+
+    /**
+     * Attempts to parse a relation from the input stream.
+     *
+     * @return the relation created by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production Relation Relation() throws ParserException
+		{
+			{
+			RelationType relType;
+			}
+		<LEFT_PAREN>
+		relType = RelationTypeLabel()
+		<RIGHT_PAREN>
+		  {
+		  return new Relation(relType);
+		  }
+		}
+
+
+    /**
+     * Attempts to parse a relation type Label from the input stream.
+     *
+     * @return the relation type created or looked up by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production RelationType RelationTypeLabel()  throws ParserException
+		{
+			{
+			com.metamata.parse.Token labelToken;
+			RelationType relType;
+			}
+		labelToken = <IDENTIFIER>
+			{
+			relType = (RelationType)relationHierarchy.getTypeByLabel(labelToken.image);
+
+			if (relType == null)
+				{
+				// Must create the type in this case.  Assume universal and absurd as
+				// parents and children.
+				relType = new RelationType(labelToken.image);
+				try
+					{
+					relationHierarchy.addTypeToHierarchy(relType);
+					}
+				catch (TypeAddError e)
+					{
+					// Have to do something better than this.
+					e.printStackTrace();
+					System.exit(1);
+					}
+				catch (TypeChangeError e)
+					{
+					// Have to do something better than this.
+					e.printStackTrace();
+					System.exit(1);
+					}
+				}
+
+		return relType;
+		}
+	}
+
+
+    /**
+     * Attempts to parse a lambda expression from the input stream.
+     *
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production RelationType LambdaExpression() throws ParserException
+		{
+			{
+			Graph expr = null;
+			RelationType relType = null;
+			}
+		<LAMBDA> (DefiningLabel())+
+		expr = Graph()
+		<RIGHT_PAREN>
+			{
+			return new RelationType(new RelationTypeDefinition(null, expr));
+			}
+		}
+
+
+
+/* Actor Rules */
+
+    /**
+     * Attempts to parse an actor from the input stream.
+     *
+     * @return the actor created by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production Actor Actor() throws  ParserException
+		{
+		  {
+  		return null;
+  		}
+		}
+
+
+    /**
+     * Attempts to parse a actor type Label from  the input stream.
+     *
+     * @return the actor  type created or looked up by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production RelationType ActorTypeLabel() throws ParserException
+		{
+			{
+			com.metamata.parse.Token labelToken;
+			RelationType relationType;
+			}
+		labelToken = <IDENTIFIER>
+			{
+			relationType = relationHierarchy.getTypeByLabel(labelToken.image);
+
+			if (relationType == null)
+				{
+				// Must create the type in this case.  Assume universal and absurd as
+				// parents and children.
+				relationType = new RelationType(labelToken.image);
+				try
+					{
+					relationHierarchy.addTypeToHierarchy(relationType);
+					}
+				catch (TypeAddError e)
+					{
+					// Have to do something better than this.
+					e.printStackTrace();
+					System.exit(1);
+					}
+				catch (TypeChangeError e)
+					{
+					// Have to do something better than this.
+					e.printStackTrace();
+					System.exit(1);
+					}
+				}
+
+			return relationType;
+			}
+		}
+
+
+    /**
+     * Attempts to parse a actor comment from the input stream.
+     *
+     * @return the comment created by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production String ActorComment() throws ParserException
+		{
+			{
+			com.metamata.parse.Token commentToken;
+			}
+		commentToken = <ACTOR_COMMENT>
+			{
+			return commentToken.image.substring(1, commentToken.image.length() -1);
+			}
+		}
+
+
+/* Rules for primitives */
+
+    /**
+     * Attempts to parse a name from the input stream.
+     *
+     * @return the name created by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production String Name() throws ParserException
+		{
+			{
+			com.metamata.parse.Token nameToken;
+			}
+		nameToken = <NAME_LITERAL>
+			{
+			return translateEscapeSequences(
+				nameToken.image.substring(1, nameToken.image.length() - 1));
+			}
+		}
+
+
+    /**
+     * Attempts to parse a number from the input stream.
+     *
+     * @return the number created by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production Number Number() throws ParserException
+		{
+			{
+			Number number = null;
+			com.metamata.parse.Token intToken = null, floatToken = null;
+			}
+		(intToken = <INTEGER_LITERAL> | floatToken = <FLOATING_POINT_LITERAL>)
+			{
+			try
+				{
+				if (intToken != null)
+					number = new Long(intToken.image);
+				else
+					number = new Double(floatToken.image);
+				}
+			catch (NumberFormatException e)
+				{
+				throw new ParserException("Invalid literal number format.", e);
+				}
+
+			return number;
+			}
+		}
+
+
+    /**
+     * Attempts to parse a string from the input stream.
+     *
+     * @return the string created by parsing.
+     * @exception ParserException  if an error occurs while parsing.
+     */
+	public production String String() throws ParserException
+		{
+			{
+			com.metamata.parse.Token strToken;
+			}
+		strToken = <STRING_LITERAL>
+			{
+			return translateEscapeSequences(
+				strToken.image.substring(1, strToken.image.length() - 1));
+			}
+		}
+
+	}
