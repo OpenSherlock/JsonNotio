@@ -2,6 +2,8 @@ package notio;
 
 import java.util.*;
 
+import com.google.gson.JsonObject;
+
     /** 
      * A class for storing the referent of a concept.
      * A referent consists of a quantifier, a designator, and a descriptor (nested graph).
@@ -42,6 +44,13 @@ public class Referent implements java.io.Serializable
   
   	/** The concept that encloses this referent. **/
   private Concept enclosingConcept;
+
+  public JsonObject toJSON() {
+	  JsonObject result = new JsonObject();
+	  
+	  
+	  return result;
+  }
 
 		/**
 		 * Constructs a new referent with the specified quantifier, designator, and descriptor.

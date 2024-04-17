@@ -1,6 +1,9 @@
 package notio;
 
 import java.util.*;
+
+import com.google.gson.JsonObject;
+
 import java.io.Serializable;
 
     /**
@@ -82,6 +85,13 @@ public class Concept extends Node implements Serializable
     this(null, null);
     }
     
+  public JsonObject toJSON() {
+	  JsonObject result = new JsonObject();
+	  
+	  
+	  return result;
+  }
+
     /**
      * Returns this concept's type.
      * Null indicates an untyped concept.

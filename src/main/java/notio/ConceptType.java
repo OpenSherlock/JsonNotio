@@ -2,6 +2,8 @@ package notio;
 
 import java.io.Serializable;
 
+import com.google.gson.JsonObject;
+
     /** 
      * The concept type class.
      * This class encapsulates all available information about a concept type.
@@ -80,6 +82,13 @@ public class ConceptType extends Type implements Serializable
     this(null, null);
     }
     
+  public JsonObject toJSON() {
+	  JsonObject result = new JsonObject();
+	  
+	  
+	  return result;
+  }
+
 		/**
 	   * Sets the type label for this type.
      * If the type already had a label, it is replaced.

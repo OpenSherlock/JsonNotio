@@ -1,6 +1,9 @@
 package notio;
 
 import java.util.Hashtable;
+
+import com.google.gson.JsonObject;
+
 import java.io.Serializable;
 
     /**
@@ -39,6 +42,14 @@ abstract public class Designator implements Serializable
 
 	  /** Flag indicating whether labels (e.g. names) are case sensitive or not. **/
   private boolean caseSensitiveLabels = false;
+  
+  public JsonObject toJSON() {
+	  JsonObject result = new JsonObject();
+	  
+	  
+	  return result;
+  }
+
   
 	  /** The referent to which this designator belongs. **/
   private Referent enclosingReferent = null;

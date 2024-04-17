@@ -1,6 +1,9 @@
 package notio;
 
 import java.util.*;
+
+import com.google.gson.JsonObject;
+
 import java.io.Serializable;
 
     /** 
@@ -40,6 +43,13 @@ class TypeHierarchy implements Serializable
   /** A vector containing the all unlabelled types. **/
 	private Vector unlabelledTypeVec = new Vector();
  
+	  public JsonObject toJSON() {
+		  JsonObject result = new JsonObject();
+		  
+		  
+		  return result;
+	  }
+
     /**
      * Constructs a type hierarchy with the specified universal and absurd
      * types.

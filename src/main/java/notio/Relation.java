@@ -1,6 +1,9 @@
 package notio;
 
 import java.util.Hashtable;
+
+import com.google.gson.JsonObject;
+
 import java.io.Serializable;
 
     /** 
@@ -56,6 +59,14 @@ public class Relation extends Node implements Serializable
   
   	/** The index of the first output arc (this is the last index for ordinary relations). **/
   int outputStartIndex;
+  
+  public JsonObject toJSON() {
+	  JsonObject result = new JsonObject();
+	  
+	  
+	  return result;
+  }
+
 
     /**
      * Constructs a relation with the given type and arguments.

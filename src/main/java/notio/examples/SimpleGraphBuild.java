@@ -96,6 +96,6 @@ public class SimpleGraphBuild
 	  animalEatsFoodRelation = new Relation(eatsType, arguments);
 
 	  graph.addRelation(animalEatsFoodRelation);
-	  System.out.println("DID "+graph.toString());
+	  System.out.println("DID "+graph.toJSON());
   	}
   }

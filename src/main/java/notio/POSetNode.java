@@ -1,6 +1,9 @@
 package notio;
 
 import java.util.*;
+
+import com.google.gson.JsonObject;
+
 import java.io.Serializable;
 
     /** 
@@ -31,6 +34,13 @@ class POSetNode implements Serializable
   Vector parents = new Vector(1, 1);
   /** Vector of child nodes. **/
   Vector children = new Vector(1, 1);
+
+  public JsonObject toJSON() {
+	  JsonObject result = new JsonObject();
+	  
+	  
+	  return result;
+  }
 
     /**
      * Constructs a new POSetNode.

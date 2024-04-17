@@ -1,4 +1,4 @@
-package notio.test;
+package notio;
 
 import notio.*;
 

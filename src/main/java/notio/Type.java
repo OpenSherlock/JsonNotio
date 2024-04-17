@@ -2,6 +2,8 @@ package notio;
 
 import java.io.Serializable;
 
+import com.google.gson.JsonObject;
+
     /** 
      * The type class.
      *
@@ -32,6 +34,13 @@ abstract class Type implements Serializable
    * @return the type label for this type.
    */
   abstract public String getLabel();
+
+  public JsonObject toJSON() {
+	  JsonObject result = new JsonObject();
+	  
+	  
+	  return result;
+  }
 
     /**
      * An implementation specific method for ensuring that every type knows

@@ -1,6 +1,9 @@
 package notio;
 
 import java.util.*;
+
+import com.google.gson.JsonObject;
+
 import java.io.Serializable;
 
     /** 
@@ -44,6 +47,13 @@ public class CoreferenceSet implements Serializable
   
   	/** A flag indicating whether or not coreference scope is checked. **/
   private boolean checkScope = false;
+
+  public JsonObject toJSON() {
+	  JsonObject result = new JsonObject();
+	  
+	  
+	  return result;
+  }
 
     /**
      * Constructs a new, empty coreference set.

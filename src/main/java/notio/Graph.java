@@ -1,6 +1,10 @@
 package notio;
 
 import java.util.*;
+
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+
 import java.io.Serializable;
 
     /**
@@ -69,6 +73,22 @@ public class Graph implements Serializable
     {
     }
 
+  public JsonObject toJSON() {
+	  JsonObject result = new JsonObject();
+	  Iterator<Concept> citr = concepts.iterator();
+	  Iterator<Relation> ritr = relations.iterator();
+	  JsonArray cx = new JsonArray();
+	  result.add("concepts", cx);
+	  while(citr.hasNext())
+		  cx.add(citr.next().toJSON());
+	  JsonArray rx = new JsonArray();
+	  result.add("relations", rx);
+	  while(ritr.hasNext())
+		  rx.add(ritr.next().toJSON());
+	  if (enclosingReferent  != null)
+		  result.add("enclosingReferent", enclosingReferent.toJSON());
+	  return result;
+  }
   /* Graph building operations */
 
     /**
